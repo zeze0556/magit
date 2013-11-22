@@ -1431,7 +1431,7 @@ Many Magit faces inherit from this one by default."
     "---"
     ["Branch..." magit-checkout t]
     ["Merge" magit-merge t]
-    ["Interactive resolve" magit-interactive-resolve-item t]
+    ["Interactive resolve" magit-interactive-resolve t]
     ["Rebase" magit-rebase-step t]
     ("Rewrite"
      ["Start" magit-rewrite-start t]
@@ -1977,6 +1977,14 @@ involving HEAD."
      nil 'require-match
      nil 'magit-read-file-hist
      (or default (magit-buffer-file-name t)))))
+
+(defun magit-read-file-trace (ignored)
+  (let ((file  (magit-read-file-from-rev "HEAD"))
+        (trace (read-string "Trace: ")))
+    (if (string-match
+         "^\\(/.+/\\|:[^:]+\\|[0-9]+,[-+]?[0-9]+\\)\\(:\\)?$" trace)
+        (concat trace (or (match-string 2 trace) ":") file)
+      (error "Trace is invalid, see man git-log"))))
 
 (defvar magit-read-rev-history nil
   "The history of inputs to `magit-read-rev' and `magit-read-tag'.")
@@ -3495,7 +3503,7 @@ Customize variable `magit-diff-refine-hunk' to change the default mode."
   (setf (magit-section-info section) (list 'typechange file))
   (let ((first-start (point-marker))
         (second-start (progn (forward-line 1)
-                             (search-forward-regexp "^diff")
+                             (re-search-forward "^diff")
                              (beginning-of-line)
                              (point-marker))))
     (save-restriction
@@ -3523,7 +3531,7 @@ Customize variable `magit-diff-refine-hunk' to change the default mode."
          (let ((file (magit-diff-line-file))
                (end (save-excursion
                       (forward-line) ;; skip over "diff" line
-                      (if (search-forward-regexp "^diff\\|^@@" nil t)
+                      (if (re-search-forward "^diff\\|^@@" nil t)
                           (goto-char (match-beginning 0))
                         (goto-char (point-max)))
                       (point-marker))))
@@ -3533,19 +3541,20 @@ Customize variable `magit-diff-refine-hunk' to change the default mode."
                            ((looking-at "^diff --cc")
                             'unmerged)
                            ((save-excursion
-                              (search-forward-regexp "^new file" end t))
+                              (re-search-forward "^new file" end t))
                             'new)
                            ((save-excursion
-                              (search-forward-regexp "^deleted" end t))
+                              (re-search-forward "^deleted" end t))
+                            (setf (magit-section-hidden section) t)
                             'deleted)
                            ((save-excursion
-                              (search-forward-regexp "^rename" end t))
+                              (re-search-forward "^rename" end t))
                             'renamed)
                            (t
                             'modified)))
                   (file2 (cond
                           ((save-excursion
-                             (search-forward-regexp "^rename from \\(.*\\)"
+                             (re-search-forward "^rename from \\(.*\\)"
                                                     end t))
                            (match-string-no-properties 1)))))
              (setf (magit-section-diff-status section) status)
@@ -3553,7 +3562,7 @@ Customize variable `magit-diff-refine-hunk' to change the default mode."
              (setf (magit-section-diff-file2  section) (or file2 file))
              (setf (magit-section-diff-range  section) magit-current-diff-range)
              (magit-insert-diff-title status file file2)
-             (when (search-forward-regexp
+             (when (re-search-forward
                     "\\(--- \\(.*\\)\n\\+\\+\\+ \\(.*\\)\n\\)" nil t)
                (let ((set-face
                       (lambda (subexp face)
@@ -4094,7 +4103,7 @@ for this argument.)"
     (when (re-search-forward "\\((.+)\\)$" (line-end-position) t)
       (replace-match (magit-format-ref-labels (match-string 1))) t t nil 1)
     (cond
-     ((search-forward-regexp
+     ((re-search-forward
        "^Merge: \\([0-9a-fA-F]+\\) \\([0-9a-fA-F]+\\)$" nil t)
       (setq magit-current-diff-range (cons (cons (match-string 1)
                                                  (match-string 2))
@@ -4107,19 +4116,18 @@ for this argument.)"
             (cons (concat magit-current-diff-range "^")
                   magit-current-diff-range))
       (setq merge-commit nil)))
-    (search-forward-regexp "^$")
+    (re-search-forward "^$")
     (when magit-show-diffstat
       (let ((pos (point)))
         (save-excursion
           (forward-char)
-          (when (search-forward-regexp (if merge-commit "^$" "^---$")
-                                       nil t)
+          (when (re-search-forward (if merge-commit "^$" "^---$") nil t)
             (delete-region (match-beginning 0)
                            (+ (match-end 0) 1))
             (insert "\n")
             (magit-wash-diffstats)))))
     (while (and
-            (search-forward-regexp
+            (re-search-forward
              "\\(\\b[0-9a-fA-F]\\{4,40\\}\\b\\)\\|\\(^diff\\)" nil 'noerror)
             (not (match-string 2)))
       (when (string-equal (magit-git-string "cat-file" "-t" (match-string 1))
@@ -4143,17 +4151,18 @@ for this argument.)"
 (defun magit-make-commit-button (start end)
   (let ((hash (buffer-substring-no-properties start end)))
     (delete-region start end)
+    (goto-char start)
     (magit-with-section (section commit hash)
       (setf (magit-section-info section) hash)
-      (make-text-button start end
-                        'help-echo "Visit commit"
-                        'action (lambda (button)
-                                  (save-excursion
-                                    (goto-char button)
-                                    (magit-visit-item)))
-                        'follow-link t
-                        'mouse-face magit-item-highlight-face
-                        'face 'magit-log-sha1))))
+      (insert-text-button hash
+                          'help-echo "Visit commit"
+                          'action (lambda (button)
+                                    (save-excursion
+                                      (goto-char button)
+                                      (magit-visit-item)))
+                          'follow-link t
+                          'mouse-face magit-item-highlight-face
+                          'face 'magit-log-sha1))))
 
 ;;;; (history)
 
@@ -4234,7 +4243,7 @@ in `magit-commit-buffer-name'."
   (magit-wash-sequence #'magit-wash-stash))
 
 (defun magit-wash-stash ()
-  (if (search-forward-regexp "stash@{\\(.*?\\)}" (line-end-position) t)
+  (if (re-search-forward "stash@{\\(.*?\\)}" (line-end-position) t)
       (let ((stash (match-string-no-properties 0))
             (name (match-string-no-properties 1)))
         (delete-region (match-beginning 0) (match-end 0))
@@ -4342,8 +4351,12 @@ when asking for user input."
 
 (defun magit-insert-untracked-files ()
   (magit-with-section (section untracked 'untracked "Untracked files:" t)
-    (let ((files (cl-mapcan (lambda (f) (when (eq (aref f 0) ??) (list f)))
-                            (magit-git-lines "status" "--porcelain" "-u"))))
+    (let ((files (cl-mapcan
+                  (lambda (f)
+                    (when (eq (aref f 0) ??) (list f)))
+                  (magit-git-lines
+                   "status" "--porcelain"
+                   (concat "-u" (magit-get "status.showUntrackedFiles"))))))
       (if (not files)
           (setq section nil)
         (dolist (file files)
@@ -4464,9 +4477,12 @@ when asking for user input."
                         " (" (magit-get "remote" remote "url") ")"))))))
 
 (defun magit-insert-status-head-line ()
-  (magit-insert-line-section (line)
-    (concat "Head: " (or (magit-format-rev-summary "HEAD")
-                         "nothing committed yet"))))
+  (let ((hash (magit-git-string "rev-parse" "HEAD")))
+    (if hash
+        (magit-insert-line-section (commit hash)
+          (concat "Head: " (magit-format-rev-summary "HEAD")))
+      (magit-insert-line-section (no-commit)
+        "Head: nothing committed yet"))))
 
 (defun magit-insert-status-tags-line ()
   (let* ((current-tag (magit-get-current-tag t))
@@ -5405,15 +5421,15 @@ even if `magit-set-upstream-on-push's value is `refuse'."
                                    (and (not branch-remote)
                                         (eq magit-set-upstream-on-push 'askifnotset)))
                                (yes-or-no-p "Set upstream while pushing? "))))))
-             (apply 'magit-run-git-async "push" "-v" push-remote
-                     (cond ((magit-get "remote" push-remote "push") (magit-get
-                                                                     "remote" push-remote "push"))
-                           (t (if ref-branch
-                                  (format "%s:%s" branch ref-branch)
-                                branch)))
-                     (if set-upstream-on-push
-                         (cons "--set-upstream" magit-custom-options)
-                       magit-custom-options))
+            (apply 'magit-run-git-async "push" "-v" push-remote
+                   (cond ((magit-get "remote" push-remote "push")
+                          (magit-get "remote" push-remote "push"))
+                         (t (if ref-branch
+                                (format "%s:%s" branch ref-branch)
+                              branch))) 
+                   (if set-upstream-on-push
+                       (cons "--set-upstream" magit-custom-options)
+                     magit-custom-options))
             ;; Although git will automatically set up the remote,
             ;; it doesn't set up the branch to merge (at least as of Git 1.6.6.1),
             ;; so we have to do that manually.
@@ -5631,8 +5647,8 @@ depending on the value of option `magit-commit-squash-commit'.
         (sit-for 0.01)))
     (pop-to-buffer buffer)
     (goto-char (point-min))
-    (cond ((not (search-forward-regexp
-                 (format "^\\* %s" (regexp-quote file)) nil t))
+    (cond ((not (re-search-forward (format "^\\* %s" (regexp-quote file))
+                                   nil t))
            ;; No entry for file, create it.
            (goto-char (point-max))
            (insert (format "\n* %s" file))
@@ -5642,15 +5658,14 @@ depending on the value of option `magit-commit-squash-commit'.
           (fun
            ;; found entry for file, look for fun
            (let ((limit (or (save-excursion
-                              (and (search-forward-regexp "^\\* "
-                                                          nil t)
+                              (and (re-search-forward "^\\* " nil t)
                                    (match-beginning 0)))
                             (point-max))))
-             (cond ((search-forward-regexp (format "(.*\\<%s\\>.*):"
-                                                   (regexp-quote fun))
-                                           limit t)
+             (cond ((re-search-forward
+                     (format "(.*\\<%s\\>.*):" (regexp-quote fun))
+                     limit t)
                     ;; found it, goto end of current entry
-                    (if (search-forward-regexp "^(" limit t)
+                    (if (re-search-forward "^(" limit t)
                         (backward-char 2)
                       (goto-char limit)))
                    (t
@@ -6218,12 +6233,22 @@ Other key binding:
              (eq (cdr range) 'working))
         (magit-interactive-resolve file1))
        ((consp (car range))
-        (magit-ediff* (magit-show (caar range) file2)
-                      (magit-show (cdar range) file2)
-                      (magit-show (cdr range) file1)))
+        (magit-ediff-buffers3 (magit-show (caar range) file2)
+                              (magit-show (cdar range) file2)
+                              (magit-show (cdr range) file1)))
        (t
-        (magit-ediff* (magit-show (car range) file2)
-                      (magit-show (cdr range) file1)))))))
+        (magit-ediff-buffers  (magit-show (car range) file2)
+                              (magit-show (cdr range) file1)))))))
+
+(defun magit-ediff-buffers (a b)
+  (setq magit-ediff-buffers (list a b))
+  (setq magit-ediff-windows (current-window-configuration))
+  (ediff-buffers a b '(magit-ediff-add-cleanup)))
+
+(defun magit-ediff-buffers3 (a b c)
+  (setq magit-ediff-buffers (list a b c))
+  (setq magit-ediff-windows (current-window-configuration))
+  (ediff-buffers3 a b c '(magit-ediff-add-cleanup)))
 
 (defun magit-ediff-add-cleanup ()
   (make-local-variable 'magit-ediff-buffers)
@@ -6233,13 +6258,6 @@ Other key binding:
   (setq-default magit-ediff-windows ())
 
   (add-hook 'ediff-cleanup-hook 'magit-ediff-restore 'append 'local))
-
-(defun magit-ediff* (a b &optional c)
-  (setq magit-ediff-buffers (list a b c))
-  (setq magit-ediff-windows (current-window-configuration))
-  (if c
-      (ediff-buffers3 a b c '(magit-ediff-add-cleanup))
-    (ediff-buffers a b '(magit-ediff-add-cleanup))))
 
 (defun magit-ediff-restore ()
   "Kill any buffers in `magit-ediff-buffers' that are not visiting files and
@@ -6275,6 +6293,51 @@ restore the window state that was saved before ediff was called."
                              0 6)))
         (magit-run-git "update-index" "--cacheinfo"
                        perm hash magit-file-name)))))
+
+;;;###autoload
+(defun magit-interactive-resolve (file)
+  (interactive (list (magit-section-case (item info)
+                       ((diff) (cadr info)))))
+  (require 'ediff)
+  (let ((merge-status (magit-git-lines "ls-files" "-u" "--" file))
+        (base-buffer (generate-new-buffer (concat file ".base")))
+        (our-buffer (generate-new-buffer (concat file ".current")))
+        (their-buffer (generate-new-buffer (concat file ".merged")))
+        (windows (current-window-configuration)))
+    (unless merge-status
+      (error "Cannot resolve %s" file))
+    (with-current-buffer base-buffer
+      (when (string-match "^[0-9]+ [0-9a-f]+ 1" (nth 0 merge-status))
+        (magit-git-insert "cat-file" "blob" (concat ":1:" file))))
+    (with-current-buffer our-buffer
+      (when (string-match "^[0-9]+ [0-9a-f]+ 2" (nth 1 merge-status))
+        (magit-git-insert "cat-file" "blob" (concat ":2:" file)))
+      (let ((buffer-file-name file))
+        (normal-mode)))
+    (with-current-buffer their-buffer
+      (when (string-match "^[0-9]+ [0-9a-f]+ 3" (nth 2 merge-status))
+        (magit-git-insert "cat-file" "blob" (concat ":3:" file)))
+      (let ((buffer-file-name file))
+        (normal-mode)))
+    ;; We have now created the 3 buffer with ours, theirs and the ancestor files
+    (with-current-buffer (ediff-merge-buffers-with-ancestor
+                          our-buffer their-buffer base-buffer nil nil file)
+      (setq ediff-show-clashes-only t)
+      (setq-local magit-ediff-windows windows)
+      (make-local-variable 'ediff-quit-hook)
+      (add-hook 'ediff-quit-hook
+                (lambda ()
+                  (let ((buffer-A ediff-buffer-A)
+                        (buffer-B ediff-buffer-B)
+                        (buffer-C ediff-buffer-C)
+                        (buffer-Ancestor ediff-ancestor-buffer)
+                        (windows magit-ediff-windows))
+                    (ediff-cleanup-mess)
+                    (kill-buffer buffer-A)
+                    (kill-buffer buffer-B)
+                    (when (bufferp buffer-Ancestor)
+                      (kill-buffer buffer-Ancestor))
+                    (set-window-configuration windows)))))))
 
 ;;; Diff Mode
 
@@ -6633,6 +6696,21 @@ With a prefix argument, visit in other window."
 
 ;;;; Visit
 
+(defun magit-visit-item (&optional other-window)
+  "Visit current item.
+With a prefix argument, visit in other window."
+  (interactive "P")
+  (magit-section-action (item info "visit" t)
+    ((untracked file) (magit-visit-file-item other-window))
+    ((diff)           (magit-visit-file-item other-window))
+    ((diffstat)       (magit-visit-file-item other-window))
+    ((hunk)           (magit-visit-file-item other-window))
+    ((commit)         (magit-show-commit info nil nil 'select))
+    ((stash)          (magit-show-stash info)
+                      (pop-to-buffer magit-stash-buffer-name))
+    ((branch)         (magit-checkout info))
+    ((longer)         (magit-log-show-more-entries ()))))
+
 (defun magit-visit-file-item (&optional other-window)
   "Visit current file associated with item.
 With a prefix argument, visit in other window."
@@ -6676,29 +6754,6 @@ With a prefix argument, visit in other window."
             (setq target (+ target 1)))
           (forward-line))
         target))))
-
-(defun magit-visit-item (&optional other-window)
-  "Visit current item.
-With a prefix argument, visit in other window."
-  (interactive "P")
-  (magit-section-action (item info "visit" t)
-    ((untracked file)
-     (call-interactively 'magit-visit-file-item))
-    ((diff)
-     (call-interactively 'magit-visit-file-item))
-    ((diffstat)
-     (call-interactively 'magit-visit-file-item))
-    ((hunk)
-     (call-interactively 'magit-visit-file-item))
-    ((commit)
-     (magit-show-commit info nil nil 'select))
-    ((stash)
-     (magit-show-stash info)
-     (pop-to-buffer magit-stash-buffer-name))
-    ((branch)
-     (magit-checkout info))
-    ((longer)
-     (magit-log-show-more-entries ()))))
 
 ;;;; Show
 
@@ -6744,56 +6799,6 @@ With a prefix argument, visit in other window."
     ((commit)
      (kill-new info)
      (message "%s" info))))
-
-;;;; Resolve
-
-(defun magit-interactive-resolve (file)
-  (require 'ediff)
-  (let ((merge-status (magit-git-lines "ls-files" "-u" "--" file))
-        (base-buffer (generate-new-buffer (concat file ".base")))
-        (our-buffer (generate-new-buffer (concat file ".current")))
-        (their-buffer (generate-new-buffer (concat file ".merged")))
-        (windows (current-window-configuration)))
-    (unless merge-status
-      (error "Cannot resolve %s" file))
-    (with-current-buffer base-buffer
-      (when (string-match "^[0-9]+ [0-9a-f]+ 1" (nth 0 merge-status))
-        (magit-git-insert "cat-file" "blob" (concat ":1:" file))))
-    (with-current-buffer our-buffer
-      (when (string-match "^[0-9]+ [0-9a-f]+ 2" (nth 1 merge-status))
-        (magit-git-insert "cat-file" "blob" (concat ":2:" file)))
-      (let ((buffer-file-name file))
-        (normal-mode)))
-    (with-current-buffer their-buffer
-      (when (string-match "^[0-9]+ [0-9a-f]+ 3" (nth 2 merge-status))
-        (magit-git-insert "cat-file" "blob" (concat ":3:" file)))
-      (let ((buffer-file-name file))
-        (normal-mode)))
-    ;; We have now created the 3 buffer with ours, theirs and the ancestor files
-    (with-current-buffer (ediff-merge-buffers-with-ancestor
-                          our-buffer their-buffer base-buffer nil nil file)
-      (setq ediff-show-clashes-only t)
-      (setq-local magit-ediff-windows windows)
-      (make-local-variable 'ediff-quit-hook)
-      (add-hook 'ediff-quit-hook
-                (lambda ()
-                  (let ((buffer-A ediff-buffer-A)
-                        (buffer-B ediff-buffer-B)
-                        (buffer-C ediff-buffer-C)
-                        (buffer-Ancestor ediff-ancestor-buffer)
-                        (windows magit-ediff-windows))
-                    (ediff-cleanup-mess)
-                    (kill-buffer buffer-A)
-                    (kill-buffer buffer-B)
-                    (when (bufferp buffer-Ancestor)
-                      (kill-buffer buffer-Ancestor))
-                    (set-window-configuration windows)))))))
-
-(defun magit-interactive-resolve-item ()
-  (interactive)
-  (magit-section-action (item info "resolv" t)
-    ((diff)
-     (magit-interactive-resolve (cadr info)))))
 
 ;;; Branch Manager Mode
 ;;__ FIXME The parens indicate preliminary subsections.
@@ -6920,7 +6925,7 @@ from the parent keymap `magit-mode-map' are also available.")
          (markers
           (append (mapcar (lambda (remote)
                             (save-excursion
-                              (when (search-forward-regexp
+                              (when (re-search-forward
                                      (concat "^  remotes/" remote) nil t)
                                 (beginning-of-line)
                                 (point-marker))))
